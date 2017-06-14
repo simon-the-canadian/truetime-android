@@ -80,11 +80,15 @@ public class SntpClient {
     /**
      * Sends an NTP request to the given host and processes the response.
      *
-     * @param ntpHost                       host name of the server.
-     * @param timeoutInMillis               network timeout in milliseconds.
-     * @param serverResponseTimeoutInMillis threshold for server response delay in milliseconds.
+     * @param ntpHost           host name of the server.
      */
-    long[] requestTime(String ntpHost, int timeoutInMillis, int serverResponseTimeoutInMillis) throws IOException {
+    synchronized long[] requestTime(String ntpHost,
+        float rootDelayMax,
+        float rootDispersionMax,
+        int serverResponseDelayMax,
+        int timeoutInMillis
+    )
+        throws IOException {
 
         DatagramSocket socket = null;
 
@@ -139,16 +143,22 @@ public class SntpClient {
 
             t[RESPONSE_INDEX_ROOT_DELAY] = read(buffer, INDEX_ROOT_DELAY);
             double rootDelay = doubleMillis(t[RESPONSE_INDEX_ROOT_DELAY]);
-            if (rootDelay > 100) {
-                throw new InvalidNtpServerResponseException("Invalid response from NTP server. Root delay violation " +
-                                                            rootDelay);
+            if (rootDelay > rootDelayMax) {
+                throw new InvalidNtpServerResponseException(
+                    "Invalid response from NTP server. %s violation. %f [actual] > %f [expected]",
+                    "root_delay",
+                    (float) rootDelay,
+                    rootDelayMax);
             }
 
             t[RESPONSE_INDEX_DISPERSION] = read(buffer, INDEX_ROOT_DISPERSION);
             double rootDispersion = doubleMillis(t[RESPONSE_INDEX_DISPERSION]);
-            if (rootDispersion > 100) {
+            if (rootDispersion > rootDispersionMax) {
                 throw new InvalidNtpServerResponseException(
-                      "Invalid response from NTP server. Root dispersion violation " + rootDispersion);
+                    "Invalid response from NTP server. %s violation. %f [actual] > %f [expected]",
+                    "root_dispersion",
+                    (float) rootDispersion,
+                    rootDispersionMax);
             }
 
             final byte mode = (byte) (buffer[0] & 0x7);
@@ -167,9 +177,13 @@ public class SntpClient {
                 throw new InvalidNtpServerResponseException("unsynchronized server responded for TrueTime");
             }
 
-            long delay = Math.abs((responseTime - originateTime) - (transmitTime - receiveTime));
-            if (delay >= serverResponseTimeoutInMillis) {
-                throw new InvalidNtpServerResponseException("Server response delay too large for comfort " + delay);
+            double delay = Math.abs((responseTime - originateTime) - (transmitTime - receiveTime));
+            if (delay >= serverResponseDelayMax) {
+                throw new InvalidNtpServerResponseException(
+                    "%s too large for comfort %f [actual] >= %f [expected]",
+                    "server_response_delay",
+                    (float) delay,
+                    serverResponseDelayMax);
             }
 
             long timeElapsedSinceRequest = Math.abs(originateTime - System.currentTimeMillis());
@@ -196,7 +210,7 @@ public class SntpClient {
         }
     }
 
-    void cacheTrueTimeInfo(long[] response) {
+    synchronized void cacheTrueTimeInfo(long[] response) {
         _cachedSntpTime = sntpTime(response);
         _cachedDeviceUptime = response[RESPONSE_INDEX_RESPONSE_TICKS];
     }
@@ -207,14 +221,14 @@ public class SntpClient {
         return responseTime + clockOffset;
     }
 
-    boolean wasInitialized() {
+    synchronized boolean wasInitialized() {
         return _sntpInitialized;
     }
 
     /**
      * @return time value computed from NTP server response
      */
-    long getCachedSntpTime() {
+    synchronized long getCachedSntpTime() {
         return _cachedSntpTime;
     }
 
